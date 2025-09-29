@@ -20,6 +20,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 先安装 pnpm（独立可执行版本，不依赖 corepack）
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # 若 package.json 里没有 "packageManager": "pnpm@x" 字段，就显式给版本
+          version: 9
+          run_install: false
+
       # 最新 LTS，并启用 pnpm 依赖缓存
       - name: Use latest LTS Node.js
         uses: actions/setup-node@v4
@@ -29,11 +37,11 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
+      # - name: Setup pnpm
+      #   uses: pnpm/action-setup@v4
+      #   with:
+      #     version: 9
+      #     run_install: false
 
       # 先预取依赖到 pnpm store（命中 setup-node 的缓存时很快）
       - name: pnpm fetch (prime store)
