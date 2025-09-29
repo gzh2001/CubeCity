@@ -1,0 +1,104 @@
+name: Build & Release CubeCity
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE_NAME: CubeCity
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 最新 LTS，并启用 pnpm 依赖缓存
+      - name: Use latest LTS Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            pnpm-lock.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      # 先预取依赖到 pnpm store（命中 setup-node 的缓存时很快）
+      - name: pnpm fetch (prime store)
+        if: ${{ hashFiles('pnpm-lock.yaml') != '' }}
+        run: pnpm fetch --dev
+
+      - name: Install dependencies (prefer offline)
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile --prefer-offline
+          else
+            npm ci || npm install
+          fi
+
+      # 恢复 Vite/TS 的构建缓存（放在安装依赖之后，构建之前）
+      - name: Restore Vite/TS cache
+        id: cache-vite
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules/.vite
+            node_modules/.cache
+            tsconfig.tsbuildinfo
+          key: ${{ runner.os }}-vite-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('vite.config.*', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vite-${{ hashFiles('pnpm-lock.yaml') }}-
+            ${{ runner.os }}-vite-
+
+      - name: Build
+        run: |
+          pnpm build || npm run build
+
+      - name: Capture build date (UTC)
+        id: meta
+        run: |
+          echo "date_iso=$(date -u +'%Y-%m-%d %H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "date_compact=$(date -u +'%Y%m%d%H%M%SZ')" >> $GITHUB_OUTPUT
+
+      - name: Package artifacts (tar.gz & tar.bz2)
+        run: |
+          test -d dist || { echo "dist/ not found after build"; exit 1; }
+          T="${{ env.PACKAGE_NAME }}-${{ github.ref_name }}-${{ steps.meta.outputs.date_compact }}"
+          tar -czf "$T.tar.gz" -C dist .
+          tar -cjf "$T.tar.bz2" -C dist .
+          echo "artifact_base=$T" >> $GITHUB_ENV
+
+      - name: Upload artifact for CI browsing (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}-${{ github.ref_name }}-${{ steps.meta.outputs.date_compact }}
+          path: |
+            ${{ env.artifact_base }}.tar.gz
+            ${{ env.artifact_base }}.tar.bz2
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "${{ env.PACKAGE_NAME }} ${{ github.ref_name }} (built ${{ steps.meta.outputs.date_iso }})"
+          generate_release_notes: true
+          files: |
+            ${{ env.artifact_base }}.tar.gz
+            ${{ env.artifact_base }}.tar.bz2
+          body: |
+            Build date (UTC): ${{ steps.meta.outputs.date_iso }}
+            Commit: ${{ github.sha }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
